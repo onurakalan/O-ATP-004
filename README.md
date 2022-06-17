@@ -2,5 +2,5 @@
 First Confirmation Compliance Performance Report
 
 *Requirements
--Hana
--ZAATP000 paketi
+*-Hana
+*-ZAATP000 paketi
