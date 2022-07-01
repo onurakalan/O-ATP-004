@@ -95,6 +95,10 @@ CLASS lcl_event_handler DEFINITION .
       after_refresh FOR EVENT after_refresh OF cl_gui_alv_grid
         IMPORTING sender .
 
+    METHODS :
+      export_excel
+        RETURNING
+          VALUE(rv_xlsx) TYPE xstring.
 ENDCLASS.
 
 
@@ -251,6 +255,7 @@ CLASS lcl_main IMPLEMENTATION.
     ENDIF.
 
     me->_modify_data( ).
+    me->filter_data( ).
     me->calc_subtotals( ).
 
   ENDMETHOD.
@@ -686,65 +691,41 @@ CLASS lcl_main IMPLEMENTATION.
   ENDMETHOD.
 
   METHOD filter_data.
+    DELETE mt_data WHERE fiil_sevk_trh NOT IN s_wadat[].
   ENDMETHOD.
 
   METHOD export_list.
-    DATA : lv_fullpath TYPE string,
-           lv_result   TYPE i,
-           lv_xlsx     TYPE xstring.
-    me->_get_filename( CHANGING cv_fullpath = lv_fullpath
-                                cv_result   = lv_result ).
-    CHECK lv_result IS INITIAL.
+    DATA(lo_conv_excel) = NEW zcl_bc_alv_to_excel( ).
 
-    DATA(lo_excel) = NEW zcl_alv2xlsx( ).
-
-    lo_excel->write_table_alv(
+    lo_conv_excel->get_alv_data(
       EXPORTING
-        io_grid                 = gr_report_view->gr_grid
-*        it_listheader           =
-*        i_top                   = 1
-*        i_left                  = 1
-*        i_columns_header        = 'X'
-*        i_columns_autofit       = 'X'
-*        i_format_col_header     =
-*        i_format_subtotal       =
-*        i_format_total          =
-      EXCEPTIONS
-        ex_transfer_kkblo_error = 1
-        ex_write_kkblo_error    = 2
-        OTHERS                  = 3
+        ir_grid = gr_report_view->gr_grid
+      IMPORTING
+        et_data = DATA(lt_data)
+        et_info = DATA(lt_info)
     ).
-    IF sy-subrc <> 0.
-      MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
-        WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
-    ENDIF.
 
-    lo_excel->save_document( i_save_path = CONV #( lv_fullpath ) ).
-    IF sy-subrc EQ 0.
-      MESSAGE i499(sy) WITH 'Data has been exported successfully'.
-    ENDIF.
-
-    CALL METHOD lo_excel->close_document.
-
-
-*    lv_xlsx = me->_prepxlsx( ).
-*
-*    me->_download_xlsx( EXPORTING iv_fullpath = lv_fullpath
-*                                  iv_xlsx     = lv_xlsx
-*                        CHANGING cv_result   = lv_result ).
-*
-*    CHECK lv_result IS INITIAL.
-*    CLEAR me->mv_impok.
+    CALL FUNCTION 'ZAATP_FM_ALV_TO_EXCEL'
+        IN BACKGROUND TASK
+        AS SEPARATE UNIT
+        DESTINATION 'NONE'
+      EXPORTING
+        it_data = lt_data
+        it_info = lt_info
+        iv_option = zcl_bc_excel_outopt=>c_mail
+        iv_title  = sy-title
+      .
+    COMMIT WORK.
   ENDMETHOD.
 
   METHOD _get_filename.
     DATA : lv_path     TYPE string,
            lv_filename TYPE string.
-*      cl_gui_frontend_services=>get_sapgui_workdir( CHANGING sapworkdir = lv_path ).
+
     cl_gui_frontend_services=>get_desktop_directory( CHANGING desktop_directory = lv_path ).
     cl_gui_cfw=>flush( ).
 
-    CONCATENATE 'İlk Termine Uyum Performans Raporu' '_' sy-datum '.XLSX' INTO lv_filename.
+    CONCATENATE sy-title '_' sy-datum '.XLSX' INTO lv_filename.
 
     CALL METHOD cl_gui_frontend_services=>file_save_dialog
       EXPORTING
@@ -806,432 +787,6 @@ CLASS lcl_main IMPLEMENTATION.
   ENDMETHOD.
 
   METHOD _prepxlsx.
-    DATA: lo_excel            TYPE REF TO zcl_excel,
-          lo_excel_writer     TYPE REF TO zif_excel_writer,
-          lo_worksheet        TYPE REF TO zcl_excel_worksheet,
-          lo_column           TYPE REF TO zcl_excel_worksheet_columndime,
-          lo_title_style      TYPE REF TO zcl_excel_style,
-          lo_title_style1     TYPE REF TO zcl_excel_style,
-          lv_top_c            TYPE zexcel_cell_style,
-          lv_top_c1           TYPE zexcel_cell_style,
-          lv_text             TYPE string,
-          lv_idx              TYPE i,
-          lv_idc              TYPE i,
-          lv_highest_column   TYPE zexcel_cell_column,
-          lv_count            TYPE int4,
-          lv_col_alpha        TYPE zexcel_cell_column_alpha,
-          lo_column_dimension TYPE REF TO zcl_excel_worksheet_columndime,
-          lo_row_dimension    TYPE REF TO zcl_excel_worksheet_rowdimensi,
-          lv_kvgr2            TYPE kvgr2,
-          lv_vbeln            TYPE vbeln,
-          lv_posnr            TYPE posnr,
-          lv_conv(25).
-
-    FIELD-SYMBOLS : <field> TYPE any.
-    TRY.
-
-        CREATE OBJECT lo_excel.
-        CREATE OBJECT lo_excel_writer TYPE zcl_excel_writer_2007.
-*    DATA(lo_excel) = NEW zcl_excel( ).
-*    DATA(lo_excel_writer) = NEW zcl_excel_writer_2007( ).
-
-        " Get active sheet
-        lo_worksheet = lo_excel->get_active_worksheet( ).
-        lo_worksheet->set_title( ip_title = 'SLA Uyum Performans').
-* style for non-changable fields
-        lo_title_style             = lo_excel->add_new_style( ).
-        lo_title_style->fill->filltype     = zcl_excel_style_fill=>c_fill_solid.
-        lo_title_style->fill->fgcolor-rgb  = zcl_excel_style_color=>c_yellow.
-        lo_title_style->font->bold = abap_true.
-        lo_title_style->font->size = 10.
-*lo_title_style->font->name = zcl_excel_style_font=>c_name_arial.
-        lo_title_style->alignment->wraptext = 'X'.
-        lo_title_style->alignment->horizontal = zcl_excel_style_alignment=>c_horizontal_center.
-        lo_title_style->alignment->vertical = zcl_excel_style_alignment=>c_vertical_center.
-        lv_top_c = lo_title_style->get_guid( ).
-
-* style for changable fields
-        lo_title_style1             = lo_excel->add_new_style( ).
-        lo_title_style1->fill->filltype     = zcl_excel_style_fill=>c_fill_solid.
-        lo_title_style1->fill->fgcolor-rgb  = zcl_excel_style_color=>c_green.
-        lo_title_style1->font->bold = abap_true.
-        lo_title_style1->font->size = 9.
-*lo_title_style->font->name = zcl_excel_style_font=>c_name_arial.
-        lo_title_style1->alignment->wraptext = 'X'.
-        lo_title_style1->alignment->horizontal = zcl_excel_style_alignment=>c_horizontal_center.
-        lo_title_style1->alignment->vertical = zcl_excel_style_alignment=>c_vertical_center.
-        lv_top_c1 = lo_title_style1->get_guid( ).
-
-        LOOP AT gr_report_view->gt_fcat ASSIGNING FIELD-SYMBOL(<fs_fieldcat>).
-          IF <fs_fieldcat>-fieldname = 'LIGHT' OR <fs_fieldcat>-fieldname = 'SEVK_ORAN'.
-            CONTINUE.
-          ENDIF.
-          ADD 1 TO lv_idx.
-          lo_worksheet->set_cell( ip_row = 1 ip_column = lv_idx ip_value = <fs_fieldcat>-scrtext_l ip_style = lv_top_c1 ).
-        ENDLOOP.
-
-        lv_idx = 1.
-        LOOP AT mt_data INTO DATA(gs_data).
-
-          IF lv_vbeln EQ gs_data-vbeln AND
-             lv_posnr NE gs_data-posnr AND
-             lv_kvgr2 EQ gs_data-kvgr2 AND
-             lv_vbeln IS NOT INITIAL   AND
-             lv_posnr IS NOT INITIAL   AND
-             lv_kvgr2 IS NOT INITIAL.
-
-            ADD 1 TO lv_idx.
-            CLEAR lv_idc.
-
-            READ TABLE gt_collect03 INTO DATA(ls_collect03) WITH KEY vbeln = lv_vbeln
-                                                                     posnr = lv_posnr
-                                                                     kvgr2 = lv_kvgr2.
-            IF sy-subrc EQ 0.
-              LOOP AT gr_report_view->gt_fcat ASSIGNING <fs_fieldcat>.
-                ASSIGN COMPONENT <fs_fieldcat>-fieldname OF STRUCTURE ls_collect03 TO <field>.
-                IF <fs_fieldcat>-fieldname = 'LIGHT' OR
-                   <fs_fieldcat>-fieldname = 'SEVK_ORAN'.
-                  CONTINUE.
-                ELSEIF <fs_fieldcat>-fieldname = 'POSNR' OR
-                       <fs_fieldcat>-fieldname = 'EBELP' OR
-                       <fs_fieldcat>-fieldname = 'ZZTEORIKTERMIN' OR
-                       <fs_fieldcat>-fieldname = 'ATPRELEVANTDOCSCHEDULELINE' OR
-                       <fs_fieldcat>-fieldname = 'ORAN' OR
-                       <fs_fieldcat>-fieldname = 'ABOPRUNUUID'.
-                  ADD 1 TO lv_idc.
-                  lo_worksheet->set_cell( ip_row = lv_idx ip_column = lv_idc ip_value = ''  ip_style = lv_top_c   ).
-                  CONTINUE.
-                ELSEIF <fs_fieldcat>-fieldname = 'KWMENG' OR
-                  <fs_fieldcat>-fieldname = 'NETWR' OR
-                  <fs_fieldcat>-fieldname = 'TEYIT_TTR' OR
-                  <fs_fieldcat>-fieldname = 'FIIL_SEVK_ADT' OR
-                  <fs_fieldcat>-fieldname = 'FIIL_SEVK_TTR' OR
-                  <fs_fieldcat>-fieldname = 'ADETSEL' OR
-                  <fs_fieldcat>-fieldname = 'TUTARSAL' OR
-                  <fs_fieldcat>-fieldname = 'CONFDQTYAFTERRUNINBASEUNIT'.
-
-                  CLEAR lv_conv.
-                  WRITE <field>  TO lv_conv.
-                  CONDENSE lv_conv NO-GAPS.
-                  ADD 1 TO lv_idc.
-                  lo_worksheet->set_cell( ip_row = lv_idx ip_column = lv_idc ip_value = lv_conv  ip_style = lv_top_c   ).
-                  CONTINUE.
-                ENDIF.
-
-                ADD 1 TO lv_idc.
-                lo_worksheet->set_cell( ip_row = lv_idx ip_column = lv_idc ip_value = <field>  ip_style = lv_top_c   ).
-              ENDLOOP.
-
-            ENDIF.
-
-          ENDIF.
-
-          IF lv_vbeln NE gs_data-vbeln AND
-             lv_kvgr2 NE gs_data-kvgr2 AND
-             lv_vbeln IS NOT INITIAL   AND
-             lv_kvgr2 IS NOT INITIAL.
-
-            ADD 1 TO lv_idx.
-            CLEAR lv_idc.
-
-            READ TABLE gt_collect02 INTO DATA(ls_collect02) WITH KEY vbeln = lv_vbeln
-                                                                     kvgr2 = lv_kvgr2.
-            IF sy-subrc EQ 0.
-              LOOP AT gr_report_view->gt_fcat ASSIGNING <fs_fieldcat>.
-                ASSIGN COMPONENT <fs_fieldcat>-fieldname OF STRUCTURE ls_collect03 TO <field>.
-                IF <fs_fieldcat>-fieldname = 'LIGHT' OR
-                   <fs_fieldcat>-fieldname = 'SEVK_ORAN'.
-                  CONTINUE.
-                ELSEIF <fs_fieldcat>-fieldname = 'POSNR' OR
-                       <fs_fieldcat>-fieldname = 'EBELP' OR
-                       <fs_fieldcat>-fieldname = 'ZZTEORIKTERMIN' OR
-                       <fs_fieldcat>-fieldname = 'ATPRELEVANTDOCSCHEDULELINE' OR
-                       <fs_fieldcat>-fieldname = 'ORAN' OR
-                       <fs_fieldcat>-fieldname = 'ABOPRUNUUID'.
-                  ADD 1 TO lv_idc.
-                  lo_worksheet->set_cell( ip_row = lv_idx ip_column = lv_idc ip_value = ''  ip_style = lv_top_c   ).
-                  CONTINUE.
-                ELSEIF <fs_fieldcat>-fieldname = 'KWMENG' OR
-                  <fs_fieldcat>-fieldname = 'NETWR' OR
-                  <fs_fieldcat>-fieldname = 'TEYIT_TTR' OR
-                  <fs_fieldcat>-fieldname = 'FIIL_SEVK_ADT' OR
-                  <fs_fieldcat>-fieldname = 'FIIL_SEVK_TTR' OR
-                  <fs_fieldcat>-fieldname = 'ADETSEL' OR
-                  <fs_fieldcat>-fieldname = 'TUTARSAL' OR
-                  <fs_fieldcat>-fieldname = 'CONFDQTYAFTERRUNINBASEUNIT'.
-
-                  CLEAR lv_conv.
-                  WRITE <field>  TO lv_conv.
-                  CONDENSE lv_conv NO-GAPS.
-                  ADD 1 TO lv_idc.
-                  lo_worksheet->set_cell( ip_row = lv_idx ip_column = lv_idc ip_value = lv_conv  ip_style = lv_top_c   ).
-                  CONTINUE.
-                ENDIF.
-
-                ADD 1 TO lv_idc.
-                lo_worksheet->set_cell( ip_row = lv_idx ip_column = lv_idc ip_value = <field>  ip_style = lv_top_c   ).
-              ENDLOOP.
-
-            ENDIF.
-          ENDIF.
-
-
-          IF lv_kvgr2 NE gs_data-kvgr2 AND lv_kvgr2 IS NOT INITIAL.
-
-            ADD 1 TO lv_idx.
-            CLEAR lv_idc.
-
-            READ TABLE gt_collect01 INTO DATA(ls_collect01) WITH KEY kvgr2 = lv_kvgr2.
-            IF sy-subrc EQ 0.
-              LOOP AT gr_report_view->gt_fcat ASSIGNING <fs_fieldcat>.
-                ASSIGN COMPONENT <fs_fieldcat>-fieldname OF STRUCTURE ls_collect01 TO <field>.
-                IF <fs_fieldcat>-fieldname = 'LIGHT' OR
-                   <fs_fieldcat>-fieldname = 'SEVK_ORAN'.
-                  CONTINUE.
-                ELSEIF <fs_fieldcat>-fieldname = 'POSNR' OR
-                 <fs_fieldcat>-fieldname = 'EBELP' OR
-                 <fs_fieldcat>-fieldname = 'ZZTEORIKTERMIN' OR
-                 <fs_fieldcat>-fieldname = 'ATPRELEVANTDOCSCHEDULELINE' OR
-                 <fs_fieldcat>-fieldname = 'ORAN' OR
-                 <fs_fieldcat>-fieldname = 'ABOPRUNUUID'.
-                  ADD 1 TO lv_idc.
-                  lo_worksheet->set_cell( ip_row = lv_idx ip_column = lv_idc ip_value = ''  ip_style = lv_top_c   ).
-                  CONTINUE.
-                ELSEIF <fs_fieldcat>-fieldname = 'KWMENG' OR
-                    <fs_fieldcat>-fieldname = 'NETWR' OR
-                    <fs_fieldcat>-fieldname = 'TEYIT_TTR' OR
-                    <fs_fieldcat>-fieldname = 'FIIL_SEVK_ADT' OR
-                    <fs_fieldcat>-fieldname = 'FIIL_SEVK_TTR' OR
-                    <fs_fieldcat>-fieldname = 'ADETSEL' OR
-                    <fs_fieldcat>-fieldname = 'TUTARSAL' OR
-                    <fs_fieldcat>-fieldname = 'CONFDQTYAFTERRUNINBASEUNIT'.
-
-                  CLEAR lv_conv.
-                  WRITE <field>  TO lv_conv.
-                  CONDENSE lv_conv NO-GAPS.
-                  ADD 1 TO lv_idc.
-                  lo_worksheet->set_cell( ip_row = lv_idx ip_column = lv_idc ip_value = lv_conv  ip_style = lv_top_c   ).
-                  CONTINUE.
-                ENDIF.
-
-                ADD 1 TO lv_idc.
-                lo_worksheet->set_cell( ip_row = lv_idx ip_column = lv_idc ip_value = <field>  ip_style = lv_top_c   ).
-              ENDLOOP.
-
-            ENDIF.
-          ENDIF.
-
-          lv_vbeln = gs_data-vbeln.
-          lv_posnr = gs_data-posnr.
-          lv_kvgr2 = gs_data-kvgr2.
-
-          ADD 1 TO lv_idx.
-
-          CLEAR lv_idc.
-          LOOP AT gr_report_view->gt_fcat ASSIGNING <fs_fieldcat>.
-            ASSIGN COMPONENT <fs_fieldcat>-fieldname OF STRUCTURE gs_data TO <field>.
-            IF <fs_fieldcat>-fieldname = 'LIGHT' OR <fs_fieldcat>-fieldname = 'SEVK_ORAN'.
-              CONTINUE.
-            ENDIF.
-
-            ADD 1 TO lv_idc.
-            lo_worksheet->set_cell( ip_row = lv_idx ip_column = lv_idc ip_value = <field>    ).
-          ENDLOOP.
-        ENDLOOP.
-
-        ADD 1 TO lv_idx.
-        CLEAR lv_idc.
-
-        READ TABLE gt_collect03 INTO ls_collect03 WITH KEY vbeln = gs_data-vbeln
-                                                           posnr = gs_data-posnr
-                                                           kvgr2 = gs_data-kvgr2.
-        IF sy-subrc EQ 0.
-          LOOP AT gr_report_view->gt_fcat ASSIGNING <fs_fieldcat>.
-            ASSIGN COMPONENT <fs_fieldcat>-fieldname OF STRUCTURE ls_collect03 TO <field>.
-            IF <fs_fieldcat>-fieldname = 'LIGHT' OR
-               <fs_fieldcat>-fieldname = 'SEVK_ORAN'.
-              CONTINUE.
-            ELSEIF <fs_fieldcat>-fieldname = 'POSNR' OR
-                      <fs_fieldcat>-fieldname = 'EBELP' OR
-                      <fs_fieldcat>-fieldname = 'ZZTEORIKTERMIN' OR
-                      <fs_fieldcat>-fieldname = 'ATPRELEVANTDOCSCHEDULELINE' OR
-                      <fs_fieldcat>-fieldname = 'ORAN' OR
-                      <fs_fieldcat>-fieldname = 'ABOPRUNUUID'.
-              ADD 1 TO lv_idc.
-              lo_worksheet->set_cell( ip_row = lv_idx ip_column = lv_idc ip_value = ''  ip_style = lv_top_c   ).
-              CONTINUE.
-            ELSEIF <fs_fieldcat>-fieldname = 'KWMENG' OR
-                     <fs_fieldcat>-fieldname = 'NETWR' OR
-                     <fs_fieldcat>-fieldname = 'TEYIT_TTR' OR
-                     <fs_fieldcat>-fieldname = 'FIIL_SEVK_ADT' OR
-                     <fs_fieldcat>-fieldname = 'FIIL_SEVK_TTR' OR
-                     <fs_fieldcat>-fieldname = 'ADETSEL' OR
-                     <fs_fieldcat>-fieldname = 'TUTARSAL' OR
-                     <fs_fieldcat>-fieldname = 'CONFDQTYAFTERRUNINBASEUNIT'.
-
-              CLEAR lv_conv.
-              WRITE <field>  TO lv_conv.
-              CONDENSE lv_conv NO-GAPS.
-              ADD 1 TO lv_idc.
-              lo_worksheet->set_cell( ip_row = lv_idx ip_column = lv_idc ip_value = lv_conv  ip_style = lv_top_c   ).
-              CONTINUE.
-            ENDIF.
-
-            ADD 1 TO lv_idc.
-            lo_worksheet->set_cell( ip_row = lv_idx ip_column = lv_idc ip_value = <field>  ip_style = lv_top_c   ).
-          ENDLOOP.
-
-        ENDIF.
-
-
-
-        ADD 1 TO lv_idx.
-        CLEAR lv_idc.
-
-        READ TABLE gt_collect02 INTO ls_collect02 WITH KEY vbeln = gs_data-vbeln
-                                                           kvgr2 = gs_data-kvgr2.
-        IF sy-subrc EQ 0.
-          LOOP AT gr_report_view->gt_fcat ASSIGNING <fs_fieldcat>.
-            ASSIGN COMPONENT <fs_fieldcat>-fieldname OF STRUCTURE ls_collect02 TO <field>.
-            IF <fs_fieldcat>-fieldname = 'LIGHT' OR
-               <fs_fieldcat>-fieldname = 'SEVK_ORAN'.
-              CONTINUE.
-            ELSEIF <fs_fieldcat>-fieldname = 'POSNR' OR
-                    <fs_fieldcat>-fieldname = 'EBELP' OR
-                    <fs_fieldcat>-fieldname = 'ZZTEORIKTERMIN' OR
-                    <fs_fieldcat>-fieldname = 'ATPRELEVANTDOCSCHEDULELINE' OR
-                    <fs_fieldcat>-fieldname = 'ORAN' OR
-                    <fs_fieldcat>-fieldname = 'ABOPRUNUUID'.
-              ADD 1 TO lv_idc.
-              lo_worksheet->set_cell( ip_row = lv_idx ip_column = lv_idc ip_value = ''  ip_style = lv_top_c   ).
-              CONTINUE.
-            ELSEIF <fs_fieldcat>-fieldname = 'KWMENG' OR
-                   <fs_fieldcat>-fieldname = 'NETWR' OR
-                   <fs_fieldcat>-fieldname = 'TEYIT_TTR' OR
-                   <fs_fieldcat>-fieldname = 'FIIL_SEVK_ADT' OR
-                   <fs_fieldcat>-fieldname = 'FIIL_SEVK_TTR' OR
-                   <fs_fieldcat>-fieldname = 'ADETSEL' OR
-                   <fs_fieldcat>-fieldname = 'TUTARSAL' OR
-                   <fs_fieldcat>-fieldname = 'CONFDQTYAFTERRUNINBASEUNIT'.
-
-              CLEAR lv_conv.
-              WRITE <field>  TO lv_conv.
-              CONDENSE lv_conv NO-GAPS.
-              ADD 1 TO lv_idc.
-              lo_worksheet->set_cell( ip_row = lv_idx ip_column = lv_idc ip_value = lv_conv  ip_style = lv_top_c   ).
-              CONTINUE.
-            ENDIF.
-
-            ADD 1 TO lv_idc.
-            lo_worksheet->set_cell( ip_row = lv_idx ip_column = lv_idc ip_value = <field>  ip_style = lv_top_c   ).
-          ENDLOOP.
-
-        ENDIF.
-
-
-
-        ADD 1 TO lv_idx.
-        CLEAR lv_idc.
-
-        READ TABLE gt_collect01 INTO ls_collect01 WITH KEY kvgr2 = gs_data-kvgr2.
-        IF sy-subrc EQ 0.
-          LOOP AT gr_report_view->gt_fcat ASSIGNING <fs_fieldcat>.
-            ASSIGN COMPONENT <fs_fieldcat>-fieldname OF STRUCTURE ls_collect01 TO <field>.
-            IF <fs_fieldcat>-fieldname = 'LIGHT' OR
-               <fs_fieldcat>-fieldname = 'SEVK_ORAN'.
-              CONTINUE.
-            ELSEIF <fs_fieldcat>-fieldname = 'POSNR' OR
-                       <fs_fieldcat>-fieldname = 'EBELP' OR
-                       <fs_fieldcat>-fieldname = 'ZZTEORIKTERMIN' OR
-                       <fs_fieldcat>-fieldname = 'ATPRELEVANTDOCSCHEDULELINE' OR
-                       <fs_fieldcat>-fieldname = 'ORAN' OR
-                       <fs_fieldcat>-fieldname = 'ABOPRUNUUID'.
-              ADD 1 TO lv_idc.
-              lo_worksheet->set_cell( ip_row = lv_idx ip_column = lv_idc ip_value = ''  ip_style = lv_top_c   ).
-              CONTINUE.
-            ELSEIF <fs_fieldcat>-fieldname = 'KWMENG' OR
-                   <fs_fieldcat>-fieldname = 'NETWR' OR
-                   <fs_fieldcat>-fieldname = 'TEYIT_TTR' OR
-                   <fs_fieldcat>-fieldname = 'FIIL_SEVK_ADT' OR
-                   <fs_fieldcat>-fieldname = 'FIIL_SEVK_TTR' OR
-                   <fs_fieldcat>-fieldname = 'ADETSEL' OR
-                   <fs_fieldcat>-fieldname = 'TUTARSAL' OR
-                   <fs_fieldcat>-fieldname = 'CONFDQTYAFTERRUNINBASEUNIT'.
-
-              CLEAR lv_conv.
-              WRITE <field>  TO lv_conv.
-              CONDENSE lv_conv NO-GAPS.
-              ADD 1 TO lv_idc.
-              lo_worksheet->set_cell( ip_row = lv_idx ip_column = lv_idc ip_value = lv_conv  ip_style = lv_top_c   ).
-              CONTINUE.
-            ENDIF.
-
-            ADD 1 TO lv_idc.
-            lo_worksheet->set_cell( ip_row = lv_idx ip_column = lv_idc ip_value = <field>  ip_style = lv_top_c   ).
-          ENDLOOP.
-        ENDIF.
-
-        ADD 1 TO lv_idx.
-        CLEAR lv_idc.
-
-        READ TABLE gt_collect00 INTO DATA(ls_collect00)  INDEX 1.
-        IF sy-subrc EQ 0.
-          LOOP AT gr_report_view->gt_fcat ASSIGNING <fs_fieldcat>.
-            ASSIGN COMPONENT <fs_fieldcat>-fieldname OF STRUCTURE ls_collect00 TO <field>.
-            IF <fs_fieldcat>-fieldname = 'LIGHT' OR
-               <fs_fieldcat>-fieldname = 'SEVK_ORAN'.
-              CONTINUE.
-            ELSEIF <fs_fieldcat>-fieldname = 'POSNR' OR
-                       <fs_fieldcat>-fieldname = 'EBELP' OR
-                       <fs_fieldcat>-fieldname = 'ZZTEORIKTERMIN' OR
-                       <fs_fieldcat>-fieldname = 'ATPRELEVANTDOCSCHEDULELINE' OR
-                       <fs_fieldcat>-fieldname = 'ORAN' OR
-                       <fs_fieldcat>-fieldname = 'ABOPRUNUUID'.
-              ADD 1 TO lv_idc.
-              lo_worksheet->set_cell( ip_row = lv_idx ip_column = lv_idc ip_value = ''  ip_style = lv_top_c   ).
-              CONTINUE.
-            ELSEIF <fs_fieldcat>-fieldname = 'KWMENG' OR
-                   <fs_fieldcat>-fieldname = 'NETWR' OR
-                   <fs_fieldcat>-fieldname = 'TEYIT_TTR' OR
-                   <fs_fieldcat>-fieldname = 'FIIL_SEVK_ADT' OR
-                   <fs_fieldcat>-fieldname = 'FIIL_SEVK_TTR' OR
-                   <fs_fieldcat>-fieldname = 'ADETSEL' OR
-                   <fs_fieldcat>-fieldname = 'TUTARSAL' OR
-                   <fs_fieldcat>-fieldname = 'CONFDQTYAFTERRUNINBASEUNIT'.
-
-              CLEAR lv_conv.
-              WRITE <field>  TO lv_conv.
-              CONDENSE lv_conv NO-GAPS.
-              ADD 1 TO lv_idc.
-              lo_worksheet->set_cell( ip_row = lv_idx ip_column = lv_idc ip_value = lv_conv  ip_style = lv_top_c   ).
-              CONTINUE.
-            ENDIF.
-
-            ADD 1 TO lv_idc.
-            lo_worksheet->set_cell( ip_row = lv_idx ip_column = lv_idc ip_value = <field>  ip_style = lv_top_c   ).
-          ENDLOOP.
-        ENDIF.
-
-
-
-
-        lv_highest_column = lo_worksheet->get_highest_column( ).
-        lv_count = 1.
-        WHILE lv_count <= lv_highest_column.
-          lv_col_alpha = zcl_excel_common=>convert_column2alpha( ip_column = lv_count ).
-          lo_column_dimension = lo_worksheet->get_column_dimension( ip_column = lv_col_alpha ).
-          lo_column_dimension->set_auto_size( ip_auto_size = abap_true ).
-          lv_count = lv_count + 1.
-        ENDWHILE.
-
-*  lo_column = lo_worksheet->get_column_dimension( ip_column = 'A' ).
-*  lo_column->set_width( ip_width = 26 ).
-
-        rv_xlsx = lo_excel_writer->write_file( lo_excel ).
-
-      CATCH zcx_excel INTO DATA(ls_err).
-    ENDTRY.
-
   ENDMETHOD.
 
 
@@ -1290,6 +845,512 @@ CLASS lcl_event_handler IMPLEMENTATION.
 
   METHOD after_refresh.
     gr_report_view->change_subtotals( ).
+  ENDMETHOD.
+
+  METHOD export_excel.
+    CONSTANTS:
+      c_red_cell   TYPE lvc_istyle VALUE '7',
+      c_green_cell TYPE lvc_istyle VALUE '6',
+      c_subtotal   TYPE lvc_istyle VALUE '36',
+      c_total      TYPE lvc_istyle VALUE '44'.
+
+    CONSTANTS:
+      c_header_count TYPE i VALUE 1.
+
+    DATA :
+      lr_grid_facade TYPE REF TO cl_salv_gui_grid_facade.
+
+    DATA: lo_excel        TYPE REF TO zcl_excel,
+          lo_excel_writer TYPE REF TO zif_excel_writer,
+          lo_worksheet    TYPE REF TO zcl_excel_worksheet.
+*          lo_column       TYPE REF TO zcl_excel_worksheet_columndime.
+
+    DATA : lv_style TYPE zexcel_cell_style.
+
+    DATA : lv_progress_percentage TYPE i VALUE 0.
+
+    FIELD-SYMBOLS:
+      <lt_data2> TYPE lvc_t_data,
+      <lt_info2> TYPE lvc_t_info.
+
+    TYPES:
+      tt_data TYPE SORTED TABLE OF lvc_s_data WITH NON-UNIQUE KEY row_pos col_pos,
+      tt_info TYPE SORTED TABLE OF lvc_s_info WITH NON-UNIQUE KEY col_pos.
+
+    DATA:
+      lt_data TYPE tt_data,
+      lt_info TYPE tt_info.
+
+*GET ALV DATA
+**********************************************************************
+    CREATE OBJECT lr_grid_facade
+      EXPORTING
+        o_grid = gr_report_view->gr_grid.
+
+
+    CALL FUNCTION 'SAPGUI_PROGRESS_INDICATOR'
+      EXPORTING
+        percentage = lv_progress_percentage
+        text       = |Extracting Alv ... %{ lv_progress_percentage }|.
+
+    lr_grid_facade->if_salv_gui_grid_lvc_data~get_all_data(
+      EXPORTING
+        gui_type      = cl_salv_gru_view_grid=>c_gui_type-windows
+        view          = if_salv_c_function=>view_excel
+      IMPORTING
+        table_lines   = DATA(lt_table_lines)
+        rt_data       = DATA(lr_data)
+        rt_info       = DATA(lr_info)
+        rt_idpo       = DATA(lr_idpo)
+        rt_poid       = DATA(lr_poid)
+        rt_roid       = DATA(lr_roid)
+        t_start_index = DATA(lr_start_index)
+    ).
+
+    ASSIGN lr_data->* TO <lt_data2>.
+    ASSIGN lr_info->* TO <lt_info2>.
+
+    INSERT LINES OF <lt_data2> INTO TABLE lt_data.
+    INSERT LINES OF <lt_info2> INTO TABLE lt_info.
+
+
+    lv_progress_percentage = 100.
+    CALL FUNCTION 'SAPGUI_PROGRESS_INDICATOR'
+      EXPORTING
+        percentage = lv_progress_percentage
+        text       = |Extracting Alv ... %{ lv_progress_percentage }|.
+
+*GET ACTIVE SHEET
+**********************************************************************
+    CREATE OBJECT lo_excel.
+    CREATE OBJECT lo_excel_writer TYPE zcl_excel_writer_2007.
+    TRY.
+        lo_worksheet = lo_excel->get_active_worksheet( ).
+        lo_worksheet->set_title( ip_title = CONV #( sy-title ) ).
+      CATCH zcx_excel.
+        EXIT.
+    ENDTRY.
+
+*SET STYLE
+**********************************************************************
+    "header line
+    """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+    DATA(lo_title_style) = lo_excel->add_new_style( ).
+    lo_title_style->fill->filltype     = zcl_excel_style_fill=>c_fill_solid.
+    lo_title_style->fill->fgcolor-rgb  = zcl_excel_style_color=>c_gray.
+    lo_title_style->font->bold = abap_true.
+    lo_title_style->font->size = 10.
+    lo_title_style->alignment->wraptext = 'X'.
+    lo_title_style->alignment->horizontal = zcl_excel_style_alignment=>c_horizontal_center.
+    lo_title_style->alignment->vertical = zcl_excel_style_alignment=>c_vertical_center.
+    CREATE OBJECT lo_title_style->borders->allborders.
+    lo_title_style->borders->allborders->border_style = zcl_excel_style_border=>c_border_thin.
+    DATA(lv_style_title) = lo_title_style->get_guid( ).
+
+    "total line style
+    """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+    DATA(lo_total_style) = lo_excel->add_new_style( ).
+    lo_total_style->fill->filltype     = zcl_excel_style_fill=>c_fill_solid.
+    lo_total_style->fill->fgcolor-rgb  = zcl_excel_style_color=>c_darkyellow.
+    lo_total_style->font->bold = abap_true.
+    lo_total_style->font->size = 10.
+    lo_total_style->alignment->wraptext = 'X'.
+    lo_total_style->alignment->horizontal = zcl_excel_style_alignment=>c_horizontal_center.
+    lo_total_style->alignment->vertical = zcl_excel_style_alignment=>c_vertical_center.
+    CREATE OBJECT lo_total_style->borders->allborders.
+    lo_total_style->borders->allborders->border_style = zcl_excel_style_border=>c_border_thin.
+    DATA(lv_style_total) = lo_total_style->get_guid( ).
+
+    "subtotal style - sides border
+    """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+    DATA(lo_subtotal_style1) = lo_excel->add_new_style( ).
+    lo_subtotal_style1->fill->filltype     = zcl_excel_style_fill=>c_fill_solid.
+    lo_subtotal_style1->fill->fgcolor-rgb  = zcl_excel_style_color=>c_yellow.
+    lo_subtotal_style1->font->bold = abap_true.
+    lo_subtotal_style1->font->size = 10.
+    lo_subtotal_style1->alignment->wraptext = 'X'.
+    lo_subtotal_style1->alignment->horizontal = zcl_excel_style_alignment=>c_horizontal_center.
+    lo_subtotal_style1->alignment->vertical = zcl_excel_style_alignment=>c_vertical_center.
+    CREATE OBJECT lo_subtotal_style1->borders->left.
+    CREATE OBJECT lo_subtotal_style1->borders->right.
+    lo_subtotal_style1->borders->left->border_style = zcl_excel_style_border=>c_border_thin.
+    lo_subtotal_style1->borders->right->border_style = zcl_excel_style_border=>c_border_thin.
+    DATA(lv_style_subtotal1) = lo_subtotal_style1->get_guid( ).
+
+    "subtotal style - down border
+    """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+    DATA(lo_subtotal_style2) = lo_excel->add_new_style( ).
+    lo_subtotal_style2->fill->filltype     = zcl_excel_style_fill=>c_fill_solid.
+    lo_subtotal_style2->fill->fgcolor-rgb  = zcl_excel_style_color=>c_yellow.
+    lo_subtotal_style2->font->bold = abap_true.
+    lo_subtotal_style2->font->size = 10.
+    lo_subtotal_style2->alignment->wraptext = 'X'.
+    lo_subtotal_style2->alignment->horizontal = zcl_excel_style_alignment=>c_horizontal_center.
+    lo_subtotal_style2->alignment->vertical = zcl_excel_style_alignment=>c_vertical_center.
+    CREATE OBJECT lo_subtotal_style2->borders->down.
+    lo_subtotal_style2->borders->down->border_style = zcl_excel_style_border=>c_border_thin.
+    DATA(lv_style_subtotal2) = lo_subtotal_style2->get_guid( ).
+
+    "subtotal style - top down border
+    """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+    DATA(lo_subtotal_style3) = lo_excel->add_new_style( ).
+    lo_subtotal_style3->fill->filltype     = zcl_excel_style_fill=>c_fill_solid.
+    lo_subtotal_style3->fill->fgcolor-rgb  = zcl_excel_style_color=>c_yellow.
+    lo_subtotal_style3->font->bold = abap_true.
+    lo_subtotal_style3->font->size = 10.
+    lo_subtotal_style3->alignment->wraptext = 'X'.
+    lo_subtotal_style3->alignment->horizontal = zcl_excel_style_alignment=>c_horizontal_center.
+    lo_subtotal_style3->alignment->vertical = zcl_excel_style_alignment=>c_vertical_center.
+    CREATE OBJECT lo_subtotal_style3->borders->top.
+    CREATE OBJECT lo_subtotal_style3->borders->down.
+    lo_subtotal_style3->borders->top->border_style = zcl_excel_style_border=>c_border_thin.
+    lo_subtotal_style3->borders->down->border_style = zcl_excel_style_border=>c_border_thin.
+    DATA(lv_style_subtotal3) = lo_subtotal_style3->get_guid( ).
+
+    "cell - green
+    """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+    DATA(lo_green_style) = lo_excel->add_new_style( ).
+    lo_green_style->fill->filltype     = zcl_excel_style_fill=>c_fill_solid.
+    lo_green_style->fill->fgcolor-rgb  = zcl_excel_style_color=>c_green.
+    lo_green_style->font->size = 10.
+    lo_green_style->alignment->wraptext = 'X'.
+    lo_green_style->alignment->horizontal = zcl_excel_style_alignment=>c_horizontal_center.
+    lo_green_style->alignment->vertical = zcl_excel_style_alignment=>c_vertical_center.
+    CREATE OBJECT lo_green_style->borders->allborders.
+    lo_green_style->borders->allborders->border_style = zcl_excel_style_border=>c_border_thin.
+    DATA(lv_style_green_cell) = lo_green_style->get_guid( ).
+
+    "cell - red
+    """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+    DATA(lo_red_style) = lo_excel->add_new_style( ).
+    lo_red_style->fill->filltype     = zcl_excel_style_fill=>c_fill_solid.
+    lo_red_style->fill->fgcolor-rgb  = zcl_excel_style_color=>c_red.
+    lo_red_style->font->size = 10.
+    lo_red_style->alignment->wraptext = 'X'.
+    lo_red_style->alignment->horizontal = zcl_excel_style_alignment=>c_horizontal_center.
+    lo_red_style->alignment->vertical = zcl_excel_style_alignment=>c_vertical_center.
+    CREATE OBJECT lo_red_style->borders->allborders.
+    lo_red_style->borders->allborders->border_style = zcl_excel_style_border=>c_border_thin.
+    DATA(lv_style_red_cell) = lo_red_style->get_guid( ).
+
+    "cell others
+    """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+    DATA(lo_cell_style) = lo_excel->add_new_style( ).
+    lo_cell_style->fill->filltype     = zcl_excel_style_fill=>c_fill_solid.
+    lo_cell_style->fill->fgcolor-rgb  = zcl_excel_style_color=>c_white.
+    lo_cell_style->font->size = 10.
+    lo_cell_style->alignment->wraptext = 'X'.
+    lo_cell_style->alignment->horizontal = zcl_excel_style_alignment=>c_horizontal_center.
+    lo_cell_style->alignment->vertical = zcl_excel_style_alignment=>c_vertical_center.
+    CREATE OBJECT lo_cell_style->borders->allborders.
+    lo_cell_style->borders->allborders->border_style = zcl_excel_style_border=>c_border_thin.
+    DATA(lv_style_cell) = lo_cell_style->get_guid( ).
+
+
+
+*DATA TO EXCEL
+**********************************************************************
+    "sortingenli sütunları bulmak
+    DATA:
+      lv_colpos1 TYPE i,
+      lv_colpos2 TYPE i,
+      lv_colpos3 TYPE i,
+      lv_colpos4 TYPE i,
+      lv_colpos5 TYPE i,
+      lv_colpos6 TYPE i,
+      lv_colpos7 TYPE i,
+      lv_colpos8 TYPE i.
+
+
+    "header
+    """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+    LOOP AT lt_info ASSIGNING FIELD-SYMBOL(<lfs_info>).
+      TRY.
+          lo_worksheet->set_cell( ip_row = 1
+                                  ip_column = <lfs_info>-col_pos
+                                  ip_value = <lfs_info>-text_m
+                                  ip_style = lv_style_title   ).
+        CATCH zcx_excel.
+      ENDTRY.
+
+      CHECK <lfs_info>-merge IS NOT INITIAL.
+      IF lv_colpos1 IS INITIAL.
+        lv_colpos1 = <lfs_info>-col_pos.
+        CONTINUE.
+      ENDIF.
+      IF lv_colpos2 IS INITIAL.
+        lv_colpos2 = <lfs_info>-col_pos.
+        CONTINUE.
+      ENDIF.
+      IF lv_colpos3 IS INITIAL.
+        lv_colpos3 = <lfs_info>-col_pos.
+        CONTINUE.
+      ENDIF.
+      IF lv_colpos4 IS INITIAL.
+        lv_colpos4 = <lfs_info>-col_pos.
+        CONTINUE.
+      ENDIF.
+      IF lv_colpos5 IS INITIAL.
+        lv_colpos5 = <lfs_info>-col_pos.
+        CONTINUE.
+      ENDIF.
+      IF lv_colpos6 IS INITIAL.
+        lv_colpos6 = <lfs_info>-col_pos.
+        CONTINUE.
+      ENDIF.
+      IF lv_colpos7 IS INITIAL.
+        lv_colpos7 = <lfs_info>-col_pos.
+        CONTINUE.
+      ENDIF.
+      IF lv_colpos8 IS INITIAL.
+        lv_colpos8 = <lfs_info>-col_pos.
+        CONTINUE.
+      ENDIF.
+
+    ENDLOOP.
+
+    "data
+    """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+    DATA :
+      lv_sub1beg TYPE i VALUE 2,
+      lv_sub2beg TYPE i VALUE 2,
+      lv_sub3beg TYPE i VALUE 2,
+      lv_sub4beg TYPE i VALUE 2,
+      lv_sub5beg TYPE i VALUE 2,
+      lv_sub6beg TYPE i VALUE 2,
+      lv_sub7beg TYPE i VALUE 2,
+      lv_sub8beg TYPE i VALUE 2,
+      lv_totbeg  TYPE i VALUE 2.
+
+    DATA : lv_sub_count TYPE i VALUE 0.
+
+    DATA : lv_row_from TYPE i,
+           lv_row_to   TYPE i.
+
+    DATA : lv_rowno TYPE zexcel_cell_row.
+
+    DATA(lv_lines) = lines( lt_data ).
+    READ TABLE lt_data ASSIGNING FIELD-SYMBOL(<lfs_data2>) INDEX lv_lines.
+    DATA(lv_last_row) = <lfs_data2>-row_pos.
+
+    LOOP AT lt_data ASSIGNING FIELD-SYMBOL(<lgfs_row>) WHERE col_pos GT 0 GROUP BY <lgfs_row>-row_pos .
+
+      LOOP AT GROUP <lgfs_row> ASSIGNING FIELD-SYMBOL(<lfs_column>) WHERE col_pos GT 0.
+
+        "style
+        """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+        CASE <lfs_column>-style.
+          WHEN c_red_cell.
+            lv_style = lv_style_red_cell.
+          WHEN c_green_cell.
+            lv_style = lv_style_green_cell.
+          WHEN c_subtotal.
+
+            READ TABLE lt_info ASSIGNING <lfs_info> WITH KEY col_pos = <lfs_column>-col_pos BINARY SEARCH.
+
+
+            IF <lfs_column>-value IS INITIAL OR
+                <lfs_info>-merge NE 'X'.
+              lv_style = lv_style_subtotal3.
+            ELSE.
+              READ TABLE lt_data ASSIGNING FIELD-SYMBOL(<lfs_data>)
+                  WITH KEY col_pos = <lfs_column>-col_pos
+                           row_pos = <lfs_column>-row_pos + 1 BINARY SEARCH.
+              IF <lfs_data>-value EQ <lfs_column>-value.
+                lv_style = lv_style_subtotal1."sonraki değer değişmişse->sides border
+              ELSE.
+                lv_style = lv_style_subtotal2."sonraki değer değişmemişse->down border
+              ENDIF.
+            ENDIF.
+
+          WHEN c_total.
+            lv_style = lv_style_total.
+          WHEN OTHERS.
+
+            IF <lfs_column>-col_pos EQ lv_colpos1 OR
+               <lfs_column>-col_pos EQ lv_colpos2 OR
+               <lfs_column>-col_pos EQ lv_colpos3 OR
+               <lfs_column>-col_pos EQ lv_colpos4 OR
+               <lfs_column>-col_pos EQ lv_colpos5 OR
+               <lfs_column>-col_pos EQ lv_colpos6 OR
+               <lfs_column>-col_pos EQ lv_colpos7 OR
+               <lfs_column>-col_pos EQ lv_colpos8.
+
+              lv_style = lv_style_subtotal1.
+
+            ELSE.
+
+              lv_style = lv_style_cell.
+
+            ENDIF.
+        ENDCASE.
+        "row no
+        """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+        lv_rowno = <lgfs_row>-row_pos + c_header_count.
+
+        "value
+        """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+        CONDENSE <lfs_column>-value NO-GAPS.
+
+        "set cell
+        """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+        TRY.
+            lo_worksheet->set_cell( ip_row = lv_rowno
+                                    ip_column = <lfs_column>-col_pos
+                                    ip_value = <lfs_column>-value
+                                    ip_abap_type = cl_abap_typedescr=>typekind_string
+                                    ip_style = COND #( WHEN lv_style IS NOT INITIAL THEN lv_style )  ).
+          CATCH zcx_excel.
+        ENDTRY.
+
+        CLEAR : lv_style.
+      ENDLOOP.
+
+      "grouping
+      """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+      IF <lgfs_row>-style EQ c_subtotal.
+        lv_sub_count = lv_sub_count + 1.
+
+        CASE lv_sub_count.
+          WHEN 1.
+            lv_row_from = lv_sub1beg.
+          WHEN 2.
+            lv_row_from = lv_sub2beg.
+          WHEN 3.
+            lv_row_from = lv_sub3beg.
+          WHEN 4.
+            lv_row_from = lv_sub4beg.
+          WHEN 5.
+            lv_row_from = lv_sub5beg.
+          WHEN 6.
+            lv_row_from = lv_sub6beg.
+          WHEN 7.
+            lv_row_from = lv_sub7beg.
+          WHEN 8.
+            lv_row_from = lv_sub8beg.
+          WHEN 9.
+            lv_row_from = lv_totbeg.
+        ENDCASE.
+
+        lv_row_to = <lgfs_row>-row_pos .
+
+        TRY.
+            lo_worksheet->set_row_outline(
+              EXPORTING
+                iv_row_from  = lv_row_from
+                iv_row_to    = lv_row_to
+                iv_collapsed = abap_false
+            ).
+          CATCH zcx_excel.
+        ENDTRY.
+
+      ELSE.
+        IF <lgfs_row>-style NE c_total.
+          IF lv_sub_count NE 0.
+
+            CASE lv_sub_count.
+              WHEN 1.
+                lv_sub1beg = <lgfs_row>-row_pos + c_header_count.
+              WHEN 2.
+                lv_sub1beg = <lgfs_row>-row_pos + c_header_count.
+                lv_sub2beg = <lgfs_row>-row_pos + c_header_count.
+              WHEN 3.
+                lv_sub1beg = <lgfs_row>-row_pos + c_header_count.
+                lv_sub2beg = <lgfs_row>-row_pos + c_header_count.
+                lv_sub3beg = <lgfs_row>-row_pos + c_header_count.
+              WHEN 4.
+                lv_sub1beg = <lgfs_row>-row_pos + c_header_count.
+                lv_sub2beg = <lgfs_row>-row_pos + c_header_count.
+                lv_sub3beg = <lgfs_row>-row_pos + c_header_count.
+                lv_sub4beg = <lgfs_row>-row_pos + c_header_count.
+              WHEN 5.
+                lv_sub1beg = <lgfs_row>-row_pos + c_header_count.
+                lv_sub2beg = <lgfs_row>-row_pos + c_header_count.
+                lv_sub3beg = <lgfs_row>-row_pos + c_header_count.
+                lv_sub4beg = <lgfs_row>-row_pos + c_header_count.
+                lv_sub5beg = <lgfs_row>-row_pos.
+              WHEN 6.
+                lv_sub1beg = <lgfs_row>-row_pos + c_header_count.
+                lv_sub2beg = <lgfs_row>-row_pos + c_header_count.
+                lv_sub3beg = <lgfs_row>-row_pos + c_header_count.
+                lv_sub4beg = <lgfs_row>-row_pos + c_header_count.
+                lv_sub5beg = <lgfs_row>-row_pos + c_header_count.
+                lv_sub6beg = <lgfs_row>-row_pos + c_header_count.
+              WHEN 7.
+                lv_sub1beg = <lgfs_row>-row_pos + c_header_count.
+                lv_sub2beg = <lgfs_row>-row_pos + c_header_count.
+                lv_sub3beg = <lgfs_row>-row_pos + c_header_count.
+                lv_sub4beg = <lgfs_row>-row_pos + c_header_count.
+                lv_sub5beg = <lgfs_row>-row_pos + c_header_count.
+                lv_sub6beg = <lgfs_row>-row_pos + c_header_count.
+                lv_sub7beg = <lgfs_row>-row_pos + c_header_count.
+              WHEN 8.
+                lv_sub1beg = <lgfs_row>-row_pos + c_header_count.
+                lv_sub2beg = <lgfs_row>-row_pos + c_header_count.
+                lv_sub3beg = <lgfs_row>-row_pos + c_header_count.
+                lv_sub4beg = <lgfs_row>-row_pos + c_header_count.
+                lv_sub5beg = <lgfs_row>-row_pos + c_header_count.
+                lv_sub6beg = <lgfs_row>-row_pos + c_header_count.
+                lv_sub7beg = <lgfs_row>-row_pos + c_header_count.
+                lv_sub8beg = <lgfs_row>-row_pos + c_header_count.
+              WHEN 9 .
+                lv_sub1beg = <lgfs_row>-row_pos + c_header_count.
+                lv_sub2beg = <lgfs_row>-row_pos + c_header_count.
+                lv_sub3beg = <lgfs_row>-row_pos + c_header_count.
+                lv_sub4beg = <lgfs_row>-row_pos + c_header_count.
+                lv_sub5beg = <lgfs_row>-row_pos + c_header_count.
+                lv_sub6beg = <lgfs_row>-row_pos + c_header_count.
+                lv_sub7beg = <lgfs_row>-row_pos + c_header_count.
+                lv_sub8beg = <lgfs_row>-row_pos + c_header_count.
+                lv_totbeg = <lgfs_row>-row_pos + c_header_count.
+            ENDCASE.
+          ENDIF.
+          lv_sub_count = 0.
+        ENDIF.
+      ENDIF.
+      CLEAR : lv_row_from,lv_row_to.
+
+
+      lv_progress_percentage = <lgfs_row>-row_pos * 100 / lv_last_row.
+      CALL FUNCTION 'SAPGUI_PROGRESS_INDICATOR'
+        EXPORTING
+          percentage = lv_progress_percentage
+          text       = |ALV to Excel ... %{ lv_progress_percentage }|.
+    ENDLOOP.
+
+
+*EXCEL TO XSTRING
+**********************************************************************
+    TRY.
+        DATA(lv_highest_column) = lo_worksheet->get_highest_column( ).
+        DATA(lv_count) = CONV int4( '1' ).
+
+        WHILE lv_count <= lv_highest_column.
+          DATA(lv_col_alpha) = zcl_excel_common=>convert_column2alpha( ip_column = lv_count ).
+          DATA(lo_column_dimension) = lo_worksheet->get_column_dimension( ip_column = lv_col_alpha ).
+          lo_column_dimension->set_auto_size( ip_auto_size = abap_true ).
+
+          lv_count = lv_count + 1.
+        ENDWHILE.
+      CATCH zcx_excel.
+        EXIT.
+    ENDTRY.
+
+    lv_progress_percentage = 0.
+    CALL FUNCTION 'SAPGUI_PROGRESS_INDICATOR'
+      EXPORTING
+        percentage = lv_progress_percentage
+        text       = |Excel downloading ... %{ lv_progress_percentage }|.
+
+    rv_xlsx = lo_excel_writer->write_file( lo_excel ).
+
+
+    lv_progress_percentage = 100.
+    CALL FUNCTION 'SAPGUI_PROGRESS_INDICATOR'
+      EXPORTING
+        percentage = lv_progress_percentage
+        text       = |Excel downloading ... %{ lv_progress_percentage }|.
+
   ENDMETHOD.
 
 ENDCLASS.
